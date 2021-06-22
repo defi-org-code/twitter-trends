@@ -1,0 +1,25 @@
+{
+  "name": "experiment-rpc-server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/mongodb": "^3.6.18",
+    "typescript": "^4.2.4"
+  },
+  "dependencies": {
+    "@types/node": "^15.6.0",
+    "crypto": "^1.0.1",
+    "got": "^11.8.2",
+    "mongodb": "^3.6.9",
+    "needle": "^2.6.0",
+    "oauth-1.0a": "^2.2.6",
+    "querystring": "^0.2.1",
+    "readline": "^1.3.0"
+  }
+}

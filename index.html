@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Twitter Crypto Trends</title>
+    <script type="text/javascript">
+
+        let entities;
+
+        const fetchEntities = async () => {
+
+            const response = await fetch(
+                `/get-trends`
+            );
+
+            const res = await response.json();
+
+            if (entities) {
+                res.hashtags.forEach(h => {
+                    if (!entities.hashtags.find(_h => _h.name === h.name)) {
+                        h.processed = 0;
+                    }
+                });
+
+                res.cashtags.forEach(c => {
+                    if (!entities.cashtags.find(_c => _c.name === c.name)) {
+                        c.processed = 0;
+                    }
+                });
+
+                res.mentions.forEach(m => {
+                    if (!entities.mentions.find(_m => _m.name === m.name)) {
+                        m.processed = 0;
+                    }
+                });
+
+                res.urls.forEach(u => {
+                    if (!entities.hashtags.find(_u => _u.name === u.name)) {
+                        u.processed = 0;
+                    }
+                });
+            }
+
+            entities = res;
+
+            fillEntities();
+
+        };
+
+        const fillEntities = () => {
+
+            document.getElementById('content').innerHTML = `
+            <div style="flex: 1">
+                <div>Hashtags</div>
+                ${
+                entities.hashtags.map(hashtag => `<div>#${hashtag.name} (${Math.round(hashtag.processed + ((hashtag.count - hashtag.processed) * Math.min(1, ((new Date().getTime() - new Date(hashtag.lastUpdateTime)) / 1000) / 60)))})</div>`).join('')
+            }
+            </div>
+            <div style="flex: 1">
+                <div>Cashtags</div>
+                ${
+                entities.cashtags.map(cashtag => `<div>#${cashtag.name} (${Math.round(cashtag.processed + ((cashtag.count - cashtag.processed) * Math.min(1, ((new Date().getTime() - new Date(cashtag.lastUpdateTime)) / 1000) / 60)))})</div>`).join('')
+            }
+            </div>
+            <div style="flex: 1">
+                <div>Mentions</div>
+                ${
+                entities.mentions.map(mention => `<div>#${mention.name} (${Math.round(mention.processed + ((mention.count - mention.processed) * Math.min(1, ((new Date().getTime() - new Date(mention.lastUpdateTime)) / 1000) / 60)))})</div>`).join('')
+            }
+            </div>
+            <div style="flex: 1">
+                <div>URLs</div>
+                ${
+                entities.urls.map(url => `<div>#${url.name} (${Math.round(url.processed + ((url.count - url.processed) * Math.min(1, ((new Date().getTime() - new Date(url.lastUpdateTime)) / 1000) / 60)))})</div>`).join('')
+            }
+            </div>
+            `;
+
+        };
+
+        window.onload = () => {
+
+            fetchEntities();
+
+            setInterval(fetchEntities, 30000);
+            setInterval(fillEntities, 1000);
+
+        };
+
+    </script>
+</head>
+<body>
+
+<div style="display: flex" id="content">
+    <div>
+        <div>
+            $BTC 100
+        </div>
+        <div>
+            $ETH 200
+        </div>
+    </div>
+    <div>
+        <div>
+            @Defiman 342
+        </div>
+        <div>
+            @rotem 2323
+        </div>
+    </div>
+    <div>
+        <div>
+            #BTC 342
+        </div>
+        <div>
+            #ETH 2323
+        </div>
+    </div>
+    <div>
+        <div>
+            https://google.com 4324
+        </div>
+        <div>
+            https://google.com 4234
+        </div>
+    </div>
+</div>
+
+</body>
+</html>
