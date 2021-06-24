@@ -1,11 +1,10 @@
 import {createServer, IncomingMessage, ServerResponse} from 'http';
-import Twitter from './twitter';
-import mongodb, {MongoClient, Db} from 'mongodb';
+import getRecentTweets from './twitter';
+import sqlite3,{Database} from 'better-sqlite3';
+import {EntitiesResult, Entity, EntityType, Tweet} from "./types";
 
 const fs = require('fs');
-
-let db: Db;
-
+let db:Database;
 const port = 5000;
 
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -14,7 +13,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
         res.writeHead(200, {
             'Content-Type': 'text/html'
         });
-        fs.readFile('../index.html', null, function (error: any, data: Buffer) {
+        fs.readFile('./index.html', null, function (error: any, data: Buffer) {
             if (error) {
                 res.writeHead(404);
                 res.write('Whoops! File not found!');
@@ -28,7 +27,9 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 
         res.setHeader('Content-Type', 'application/json');
 
-        res.end(JSON.stringify(await fetchTopEntities()));
+        const result = fs.readFileSync('./top-entities.json', 'utf8');
+
+        res.end(result);
         return;
 
     }
@@ -36,71 +37,29 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
     res.end('Hello world!');
 });
 
-type Tweet = {
-    id: string,
-    counterToUpdate?: number,
-    entities: {
-        mentions: Array<{
-            username: string
-        }>,
-        hashtags: Array<{
-            tag: string
-        }>,
-        urls: Array<{
-            url: string,
-            expanded_url: string,
-            display_url: string
-        }>,
-        cashtags: Array<{
-            tag: string
-        }>
-
-    },
-    public_metrics: {
-        retweet_count: number,
-        quote_count: number
-    }
-};
-
-type Entity = {
-    type: EntityType,
-    name: string,
-    count: number,
-    lastUpdateTime: Date
-};
-
-type EntitiesResult = {
-    hashtags: Array<Entity>,
-    cashtags: Array<Entity>,
-    mentions: Array<Entity>,
-    urls: Array<Entity>
-}
-
-enum EntityType {
-    CASHHASH,
-    HASHTAG,
-    URL,
-    MENTION
-}
-
 server.listen(port, async () => {
     console.log(`Server listening on port ${port}`);
 
-    const MongoClient: MongoClient = await mongodb.connect('mongodb://localhost:27017/twitter', {useUnifiedTopology: true});
+    db = sqlite3('./twitter.db');
 
-    db = MongoClient.db('twitter');
+    db.exec('CREATE TABLE IF NOT EXISTS tweets (id TEXT PRIMARY KEY, count INTEGER)');
+    db.exec('CREATE TABLE IF NOT EXISTS entities (name TEXT, type INTEGER, count INTEGER, processed INTEGER, lastUpdateTime TEXT, PRIMARY KEY (name, type))');
+
+    console.log("db");
+
+    //await truncateEntities();
 
     await processTweets();
 
-    setInterval(async () => {
-        await processTweets();
-    }, 30000);
+    // setInterval(async () => {
+    //     await processTweets();
+    // }, 30000);
 });
 
 const processTweets = async () => {
     console.log("process tweets", new Date());
 
-    const response = await Twitter();
+    const response = await getRecentTweets();
 
     const tweets = response.includes.tweets.map((t: any): Tweet => {
         return {id: t.id, entities: t.entities, public_metrics: t.public_metrics};
@@ -111,45 +70,34 @@ const processTweets = async () => {
     }
 
     await setProcessedEntities();
+
     await updateEntities(tweets);
+
+    await writeTopEntitiesToDisk();
+
+    console.log("Finished processing tweets", new Date());
+
 };
 
 const updateTweet = async (tweet: Tweet) => {
 
-    let counter = tweet.public_metrics.retweet_count + tweet.public_metrics.quote_count;
+    let count = tweet.public_metrics.retweet_count + tweet.public_metrics.quote_count;
 
-    const oldTweetObject = await db.collection('tweets').findOneAndUpdate(
-        {
-            id: tweet.id
-        },
-        {
-            $set: {
-                counter: counter
-            }
-        },
-        {
-            upsert: true
-        });
+    const prev: any = db.prepare('select * from tweets where id = ?').get(tweet.id);
 
-    if (!oldTweetObject.value) {
-        return counter;
+    if (!prev) {
+        db.prepare('insert into tweets values (?,?)').run(tweet.id, count);
+        return count;
+    } else {
+        db.prepare('update tweets set count = ? where id = ?').run(count, tweet.id);
+        return count - prev.count;
     }
 
-    return counter - oldTweetObject.value.counter;
 };
 
 const setProcessedEntities = async () => {
-
-    await db.collection('entities').updateMany(
-        {"$expr": {"$ne": ["$processed", "$count"]}},
-        [{
-            $set: {
-                processed: "$count",
-                lastUpdateTime: new Date()
-            }
-        }]
-    );
-
+    console.log('setProcessedEntities');
+    return db.prepare('update entities set processed = count, lastUpdateTime = ? where not IFNULL(processed, -1) = count').run(new Date().toUTCString());
 };
 
 const updateEntities = async (tweets: Array<Tweet>) => {
@@ -246,150 +194,50 @@ const updateEntities = async (tweets: Array<Tweet>) => {
 
     });
 
-    const bulk = db.collection('entities').initializeUnorderedBulkOp();
+    const entitiesStatement = db.prepare('Insert INTO entities(type,name,count,lastUpdateTime) values (?,?,?,?)\n' +
+        'ON CONFLICT (type,name) DO UPDATE SET count = count + ?, lastUpdateTime = ?');
 
-    entities.forEach(e => {
-
-        bulk
-            .find(
-                {
-                    type: e.type,
-                    name: e.name
-                }
-            )
-            .upsert()
-            .updateOne(
-                {
-                    $set: {
-                        type: e.type,
-                        name: e.name,
-                    },
-                    $inc: {
-                        count: e.count
-                    }
-                }
+    db.transaction((entities:Array<Entity>) => {
+        entities.forEach(entity => {
+            entitiesStatement.run(
+                entity.type,
+                entity.name,
+                entity.count,
+                entity.lastUpdateTime.toUTCString(),
+                entity.count,
+                entity.lastUpdateTime.toUTCString()
             );
+        });
+    })(entities);
 
-    });
+    console.log("done updateEntities");
 
-    return await bulk.execute();
+};
+
+const writeTopEntitiesToDisk = async () => {
+
+    const topEntities = await fetchTopEntities();
+
+    fs.writeFileSync('top-entities.json', JSON.stringify(topEntities), 'utf8');
 
 };
 
 const fetchTopEntities = async (): Promise<EntitiesResult> => {
 
-    console.log('fetchTopEntities', new Date());
+    const hashtags = db.prepare('select processed, count, name, lastUpdateTime from entities where type = ? order by processed desc, count desc limit 100').all(EntityType.HASHTAG);
+    const cashtags = db.prepare('select processed, count, name, lastUpdateTime from entities where type = ? order by processed desc, count desc limit 100').all(EntityType.CASHHASH);
+    const mentions = db.prepare('select processed, count, name, lastUpdateTime from entities where type = ? order by processed desc, count desc limit 100').all(EntityType.MENTION);
+    const urls = db.prepare('select processed, count, name, lastUpdateTime from entities where type = ? order by processed desc, count desc limit 100').all(EntityType.URL);
 
-    const result = await db.collection('entities').aggregate(
-        [
-            {
-                $facet: {
-                    hashtags: [
-                        {
-                            $match: {type: EntityType.HASHTAG}
-                        },
-                        {
-                            $sort: {processed: -1, count: -1} // desc
-                        },
-                        {
-                            $limit: 100
-                        },
-                        {
-                            $project: {_id: 0, type: 0}
-                        }
-                    ],
-                    cashtags: [
-                        {
-                            $match: {type: EntityType.CASHHASH}
-                        },
-                        {
-                            $sort: {processed: -1, count: -1} // desc
-                        },
-                        {
-                            $limit: 100
-                        },
-                        {
-                            $project: {_id: 0, type: 0}
-                        }
-                    ],
-                    mentions: [
-                        {
-                            $match: {type: EntityType.MENTION}
-                        },
-                        {
-                            $sort: {processed: -1, count: -1} // desc
-                        },
-                        {
-                            $limit: 100
-                        },
-                        {
-                            $project: {_id: 0, type: 0}
-                        }
-                    ],
-                    urls: [
-                        {
-                            $match: {type: EntityType.URL}
-                        },
-                        {
-                            $sort: {processed: -1, count: -1} // desc
-                        },
-                        {
-                            $limit: 100
-                        },
-                        {
-                            $project: {_id: 0, type: 0}
-                        }
-                    ]
-                }
-            }
-        ]
-    );
-
-    const results = await result.toArray();
-
-    return results[0];
+    return {
+        hashtags,
+        cashtags,
+        mentions,
+        urls
+    };
 
 };
 
-const processEntities = async () => {
-
-    const ne = {"$expr": {"$ne": ["$processed", "$count"]}};
-    const func = {
-        "$function": {
-            "body": "function(processed, count) {return processed + Math.ceil((count - processed) / 30);}",
-            "args": [
-                "$processed",
-                "$count"
-            ],
-            "lang": "js"
-        }
-    };
-
-    const result = await db.collection('entities').updateMany(ne, [{"$set": {processed: func}}]);
-
-
-    // const func = {
-    //     "$function": {
-    //         "body": function (processed: number, count: number) {
-    //             return processed + Math.ceil((count - processed) / 30)
-    //         },
-    //         "args": [
-    //             "$processed",
-    //             "$count"
-    //         ],
-    //         "lang": "js"
-    //     }
-    // };
-    //
-    // const result = await db.collection('entities').aggregate([
-    //     {
-    //         "$match": {"$expr": {"$ne": ["$processed", "$count"]}},
-    //         "$addFields": {processed: func}
-    //     }
-    // ]);
-
-    // ne, {$set: {processed: func}}
-
-    return result;
-
+const truncateEntities = async () => {
+    db.prepare('DELETE FROM entities').run();
 };

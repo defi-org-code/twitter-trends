@@ -10,13 +10,17 @@ const token = process.env.BEARER_TOKEN;
 
 const endpointUrl = "https://api.twitter.com/2/tweets/search/recent";
 
-async function getRequest() {
+async function getRecentTweets() {
+
+    const todayUTC = new Date();
+    todayUTC.setUTCHours(0, 0, 0, 0);
 
     // Edit query parameters below
     // specify a search query, and any additional fields that are required
     // by default, only the Tweet ID and text fields are returned
     const params = {
         'query': '(#defi OR #crypto OR #cryptocurrency) is:retweet',
+        'start_time': todayUTC.toISOString(),
         'tweet.fields': 'text,public_metrics,entities,referenced_tweets',
         'user.fields': 'description,public_metrics',
         'expansions': 'author_id,referenced_tweets.id',
@@ -37,4 +41,4 @@ async function getRequest() {
     }
 }
 
-export default getRequest;
+export default getRecentTweets;
